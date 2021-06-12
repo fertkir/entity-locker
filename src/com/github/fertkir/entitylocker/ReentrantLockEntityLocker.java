@@ -24,12 +24,10 @@ public class ReentrantLockEntityLocker<ID> implements EntityLocker<ID> {
 
     @Override
     public void lock(Runnable callback) {
-        globalLock.lock();
-        try {
+        lock(() -> {
             callback.run();
-        } finally {
-            globalLock.unlock();
-        }
+            return null;
+        });
     }
 
     @Override
@@ -44,15 +42,10 @@ public class ReentrantLockEntityLocker<ID> implements EntityLocker<ID> {
 
     @Override
     public void tryLock(Duration timeout, Runnable callback) throws InterruptedException, TimeoutException {
-        if (globalLock.tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-            try {
-                callback.run();
-            } finally {
-                globalLock.unlock();
-            }
-        } else {
-            throw new TimeoutException();
-        }
+        tryLock(timeout, () -> {
+            callback.run();
+            return null;
+        });
     }
 
     @Override
@@ -70,13 +63,10 @@ public class ReentrantLockEntityLocker<ID> implements EntityLocker<ID> {
 
     @Override
     public void lock(ID id, Runnable callback) {
-        Lock lock = entityLocks.computeIfAbsent(id, ignored -> createLock());
-        lock.lock();
-        try {
+        lock(id, () -> {
             callback.run();
-        } finally {
-            lock.unlock();
-        }
+            return null;
+        });
     }
 
     @Override
@@ -92,16 +82,10 @@ public class ReentrantLockEntityLocker<ID> implements EntityLocker<ID> {
 
     @Override
     public void tryLock(ID id, Duration timeout, Runnable callback) throws InterruptedException, TimeoutException {
-        Lock lock = entityLocks.computeIfAbsent(id, ignored -> createLock());
-        if (lock.tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-            try {
-                callback.run();
-            } finally {
-                lock.unlock();
-            }
-        } else {
-            throw new TimeoutException();
-        }
+        tryLock(id, timeout, () -> {
+            callback.run();
+            return null;
+        });
     }
 
     @Override
