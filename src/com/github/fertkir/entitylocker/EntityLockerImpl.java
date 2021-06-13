@@ -5,16 +5,27 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.*;
 import java.util.function.Supplier;
 
 public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
+    private static final int DEFAULT_ESCALATION_THRESHOLD = 10;
+
     private final Map<ID, Lock> entityLocks = new ConcurrentHashMap<>();
-    private final ReadWriteLock globalLock = new ReentrantReadWriteLock();
+    private final StampedLock globalLock = new StampedLock();
+    private final ThreadLocal<Integer> lockedEntitiesCount = ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Integer> readLockReentranceCount = ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Long> readLockStamp = ThreadLocal.withInitial(() -> 0L);
+    private final int escalationThreshold;
+
+    public EntityLockerImpl() {
+        this(DEFAULT_ESCALATION_THRESHOLD);
+    }
+
+    public EntityLockerImpl(int escalationThreshold) {
+        this.escalationThreshold = escalationThreshold;
+    }
 
     @Override
     public void lockGlobally(Runnable callback) {
@@ -26,12 +37,11 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     @Override
     public <T> T lockGlobally(Supplier<T> callback) {
-        Lock lock = globalLock.writeLock();
-        lock.lock();
+        long stamp = globalLock.writeLock();
         try {
             return callback.get();
         } finally {
-            lock.unlock();
+            globalLock.unlock(stamp);
         }
     }
 
@@ -45,12 +55,12 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     @Override
     public <T> T tryLockGlobally(Duration timeout, Supplier<T> callback) throws InterruptedException, TimeoutException {
-        Lock lock = globalLock.writeLock();
-        if (lock.tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+        long stamp = globalLock.tryWriteLock(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        if (stamp != 0) {
             try {
                 return callback.get();
             } finally {
-                lock.unlock();
+                globalLock.unlock(stamp);
             }
         } else {
             throw new TimeoutException();
@@ -67,18 +77,32 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     @Override
     public <T> T lock(ID id, Supplier<T> callback) {
-        Lock readLock = globalLock.readLock();
-        readLock.lock();
+        if (readLockReentranceCount.get() == 0) {
+            readLockStamp.set(globalLock.readLock());
+        }
+        readLockReentranceCount.set(readLockReentranceCount.get() + 1);
+        if (lockedEntitiesCount.get() >= escalationThreshold) {
+            long newStamp = globalLock.tryConvertToWriteLock(
+                    readLockStamp.get());
+            if (newStamp != 0) {
+                readLockStamp.set(newStamp);
+            }
+        }
         try {
             Lock lock = getLock(id);
             lock.lock();
+            incLockedEntitiesCount(lock);
             try {
                 return callback.get();
             } finally {
+                decLockedEntitiesCount(lock);
                 lock.unlock();
             }
         } finally {
-            readLock.unlock();
+            readLockReentranceCount.set(readLockReentranceCount.get() - 1);
+            if (readLockReentranceCount.get() == 0) {
+                globalLock.unlock(readLockStamp.get());
+            }
         }
     }
 
@@ -92,25 +116,51 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     @Override
     public <T> T tryLock(ID id, Duration timeout, Supplier<T> callback) throws InterruptedException, TimeoutException {
-        Lock readLock = globalLock.readLock();
-        readLock.lock();
+        if (readLockReentranceCount.get() == 0) {
+            readLockStamp.set(globalLock.readLock());
+        }
+        readLockReentranceCount.set(readLockReentranceCount.get() + 1);
+        if (lockedEntitiesCount.get() >= escalationThreshold) {
+            long newStamp = globalLock.tryConvertToWriteLock(
+                    readLockStamp.get());
+            if (newStamp != 0) {
+                readLockStamp.set(newStamp);
+            }
+        }
         try {
             Lock lock = getLock(id);
             if (lock.tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                incLockedEntitiesCount(lock);
                 try {
                     return callback.get();
                 } finally {
+                    decLockedEntitiesCount(lock);
                     lock.unlock();
                 }
             } else {
                 throw new TimeoutException();
             }
         } finally {
-            readLock.unlock();
+            readLockReentranceCount.set(readLockReentranceCount.get() - 1);
+            if (readLockReentranceCount.get() == 0) {
+                globalLock.unlock(readLockStamp.get());
+            }
         }
     }
 
     private Lock getLock(ID id) {
         return entityLocks.computeIfAbsent(id, ignored -> new ReentrantLock());
+    }
+
+    private void incLockedEntitiesCount(Lock lock) {
+        if (((ReentrantLock)lock).getHoldCount() == 1) {
+            lockedEntitiesCount.set(lockedEntitiesCount.get() + 1);
+        }
+    }
+
+    private void decLockedEntitiesCount(Lock lock) {
+        if (((ReentrantLock)lock).getHoldCount() == 1) {
+            lockedEntitiesCount.set(lockedEntitiesCount.get() - 1);
+        }
     }
 }
