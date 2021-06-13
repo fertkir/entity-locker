@@ -11,7 +11,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 
-public class ReentrantLockEntityLocker<ID> implements EntityLocker<ID> {
+public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     private final Map<ID, Lock> entityLocks = new ConcurrentHashMap<>();
     private final ReadWriteLock globalLock = new ReentrantReadWriteLock();

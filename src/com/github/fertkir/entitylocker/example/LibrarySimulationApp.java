@@ -1,6 +1,6 @@
 package com.github.fertkir.entitylocker.example;
 
-import com.github.fertkir.entitylocker.ReentrantLockEntityLocker;
+import com.github.fertkir.entitylocker.EntityLockerImpl;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,7 +13,7 @@ public class LibrarySimulationApp {
     public static void main(String[] args) {
         LibraryService libraryService = new LibraryService(
                 new BookRepository(),
-                new ReentrantLockEntityLocker<>()
+                new EntityLockerImpl<>()
         );
         ExecutorService executorService = Executors.newFixedThreadPool(AMOUNT_OF_READERS);
         IntStream.range(0, AMOUNT_OF_READERS).forEach(value ->
