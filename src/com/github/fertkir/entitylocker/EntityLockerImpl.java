@@ -12,7 +12,9 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     private static final int DEFAULT_ESCALATION_THRESHOLD = 10;
 
+    // todo we never delete values from here, may cause memory leaks
     private final Map<ID, Lock> entityLocks = new ConcurrentHashMap<>();
+
     private final StampedLock globalLock = new StampedLock();
     private final ThreadLocal<Integer> lockedEntitiesCount = ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Integer> readLockReentranceCount = ThreadLocal.withInitial(() -> 0);
