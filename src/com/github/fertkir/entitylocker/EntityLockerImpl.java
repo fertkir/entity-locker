@@ -84,8 +84,7 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
                 lock.lock(); return true;
             });
         } catch (InterruptedException | TimeoutException e) {
-            // this should not happen
-            throw new RuntimeException(); // todo maybe change exception
+            throw new AssertionError("lock.lock() should not have thrown this exception", e);
         }
     }
 
