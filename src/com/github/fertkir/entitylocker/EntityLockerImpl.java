@@ -12,7 +12,10 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     private static final int DEFAULT_ESCALATION_THRESHOLD = 10;
 
-    // todo we never delete values from here, may cause memory leaks
+    /**
+     * todo We never delete values from this map, which may cause unrestricted memory consumption.
+     * todo DelayQueue can be engaged to implement clean-up mechanism.
+     */
     private final Map<ID, ReentrantLock> entityLocks = new ConcurrentHashMap<>();
 
     private final StampedLock globalLock = new StampedLock();
