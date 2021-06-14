@@ -13,7 +13,7 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
     private static final int DEFAULT_ESCALATION_THRESHOLD = 10;
 
     // todo we never delete values from here, may cause memory leaks
-    private final Map<ID, Lock> entityLocks = new ConcurrentHashMap<>();
+    private final Map<ID, ReentrantLock> entityLocks = new ConcurrentHashMap<>();
 
     private final StampedLock globalLock = new StampedLock();
     private final ThreadLocal<Integer> lockedEntitiesCount = ThreadLocal.withInitial(() -> 0);
@@ -79,32 +79,13 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     @Override
     public <T> T lock(ID id, Supplier<T> callback) {
-        if (readLockReentranceCount.get() == 0) {
-            readLockStamp.set(globalLock.readLock());
-        }
-        readLockReentranceCount.set(readLockReentranceCount.get() + 1);
-        if (lockedEntitiesCount.get() >= escalationThreshold) {
-            long newStamp = globalLock.tryConvertToWriteLock(
-                    readLockStamp.get());
-            if (newStamp != 0) {
-                readLockStamp.set(newStamp);
-            }
-        }
         try {
-            Lock lock = getLock(id);
-            lock.lock();
-            incLockedEntitiesCount(lock);
-            try {
-                return callback.get();
-            } finally {
-                decLockedEntitiesCount(lock);
-                lock.unlock();
-            }
-        } finally {
-            readLockReentranceCount.set(readLockReentranceCount.get() - 1);
-            if (readLockReentranceCount.get() == 0) {
-                globalLock.unlock(readLockStamp.get());
-            }
+            return tryLockInternal(id, callback, lock -> {
+                lock.lock(); return true;
+            });
+        } catch (InterruptedException | TimeoutException e) {
+            // this should not happen
+            throw new RuntimeException(); // todo maybe change exception
         }
     }
 
@@ -118,6 +99,16 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
 
     @Override
     public <T> T tryLock(ID id, Duration timeout, Supplier<T> callback) throws InterruptedException, TimeoutException {
+        return tryLockInternal(id, callback, lock ->
+                lock.tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)
+        );
+    }
+
+    private <T> T tryLockInternal(
+            ID id,
+            Supplier<T> callback,
+            TryLockCallback tryLockCallback
+    ) throws InterruptedException, TimeoutException {
         if (readLockReentranceCount.get() == 0) {
             readLockStamp.set(globalLock.readLock());
         }
@@ -130,13 +121,17 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
             }
         }
         try {
-            Lock lock = getLock(id);
-            if (lock.tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                incLockedEntitiesCount(lock);
+            ReentrantLock lock = getEntityLock(id);
+            if (tryLockCallback.tryLock(lock)) {
+                if (lock.getHoldCount() == 1) {
+                    lockedEntitiesCount.set(lockedEntitiesCount.get() + 1);
+                }
                 try {
                     return callback.get();
                 } finally {
-                    decLockedEntitiesCount(lock);
+                    if (lock.getHoldCount() == 1) {
+                        lockedEntitiesCount.set(lockedEntitiesCount.get() - 1);
+                    }
                     lock.unlock();
                 }
             } else {
@@ -150,19 +145,12 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
         }
     }
 
-    private Lock getLock(ID id) {
+    private ReentrantLock getEntityLock(ID id) {
         return entityLocks.computeIfAbsent(id, ignored -> new ReentrantLock());
     }
 
-    private void incLockedEntitiesCount(Lock lock) {
-        if (((ReentrantLock)lock).getHoldCount() == 1) {
-            lockedEntitiesCount.set(lockedEntitiesCount.get() + 1);
-        }
-    }
-
-    private void decLockedEntitiesCount(Lock lock) {
-        if (((ReentrantLock)lock).getHoldCount() == 1) {
-            lockedEntitiesCount.set(lockedEntitiesCount.get() - 1);
-        }
+    @FunctionalInterface
+    private interface TryLockCallback {
+        boolean tryLock(Lock lock) throws InterruptedException, TimeoutException;
     }
 }
