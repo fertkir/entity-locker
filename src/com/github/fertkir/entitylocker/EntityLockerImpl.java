@@ -114,25 +114,24 @@ public class EntityLockerImpl<ID> implements EntityLocker<ID> {
         }
         readLockReentranceCount.set(readLockReentranceCount.get() + 1);
         if (lockedEntitiesCount.get() >= escalationThreshold) {
-            long newStamp = globalLock.tryConvertToWriteLock(
-                    readLockStamp.get());
-            if (newStamp != 0) {
-                readLockStamp.set(newStamp);
+            long escalatedStamp = globalLock.tryConvertToWriteLock(readLockStamp.get());
+            if (escalatedStamp != 0) {
+                readLockStamp.set(escalatedStamp);
             }
         }
         try {
-            ReentrantLock lock = getEntityLock(id);
-            if (tryLockCallback.tryLock(lock)) {
-                if (lock.getHoldCount() == 1) {
+            ReentrantLock entityLock = getEntityLock(id);
+            if (tryLockCallback.tryLock(entityLock)) {
+                if (entityLock.getHoldCount() == 1) {
                     lockedEntitiesCount.set(lockedEntitiesCount.get() + 1);
                 }
                 try {
                     return callback.get();
                 } finally {
-                    if (lock.getHoldCount() == 1) {
+                    if (entityLock.getHoldCount() == 1) {
                         lockedEntitiesCount.set(lockedEntitiesCount.get() - 1);
                     }
-                    lock.unlock();
+                    entityLock.unlock();
                 }
             } else {
                 throw new TimeoutException();
